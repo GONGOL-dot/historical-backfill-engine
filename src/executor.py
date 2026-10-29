@@ -1,3 +1,4 @@
+
 import argparse
 import csv
 import uuid
@@ -9,6 +10,7 @@ from pathlib import Path
 
 from src.storage import get_connection
 from src.validation import validate_event
+from src.customers import load_customers
 
 
 DATABASE_PATH = Path("sample_data/benchmark_4worker.db")
@@ -32,11 +34,7 @@ def process_partition(
     run_id,
     customer_ids,
 ):
-    """
-    Process one daily partition.
-
-    Each worker uses its own SQLite connection.
-    """
+    """Process one daily partition using its own SQLite connection."""
 
     connection = get_connection(DATABASE_PATH)
     cursor = connection.cursor()
@@ -45,11 +43,8 @@ def process_partition(
     rejected_count = 0
 
     try:
-        # Start a write transaction.
-        # SQLite serializes writers safely.
         connection.execute("BEGIN IMMEDIATE")
 
-        # Check whether this partition is already completed.
         cursor.execute(
             """
             SELECT status
@@ -57,18 +52,12 @@ def process_partition(
             WHERE run_id = ?
               AND partition_date = ?
             """,
-            (
-                run_id,
-                partition_date,
-            ),
+            (run_id, partition_date),
         )
 
         existing_partition = cursor.fetchone()
 
-        if (
-            existing_partition
-            and existing_partition[0] == "COMPLETED"
-        ):
+        if existing_partition and existing_partition[0] == "COMPLETED":
             connection.rollback()
 
             return {
@@ -78,7 +67,6 @@ def process_partition(
                 "rejected": 0,
             }
 
-        # Mark partition as RUNNING.
         cursor.execute(
             """
             INSERT INTO backfill_partitions (
@@ -113,17 +101,13 @@ def process_partition(
             ),
         )
 
-        # Process records.
         for event in partition_events:
-
             is_valid, result = validate_event(
                 event,
                 customer_ids,
             )
 
-            # Invalid event -> rejected_records.
             if not is_valid:
-
                 reason = result
 
                 cursor.execute(
@@ -153,20 +137,16 @@ def process_partition(
 
             normalized = result
 
-            # Check duplicate event ID.
             cursor.execute(
                 """
                 SELECT 1
                 FROM target_events
                 WHERE event_id = ?
                 """,
-                (
-                    normalized["event_id"],
-                ),
+                (normalized["event_id"],),
             )
 
             if cursor.fetchone():
-
                 cursor.execute(
                     """
                     INSERT INTO rejected_records (
@@ -192,7 +172,6 @@ def process_partition(
                 rejected_count += 1
                 continue
 
-            # Insert accepted event.
             cursor.execute(
                 """
                 INSERT INTO target_events (
@@ -215,7 +194,6 @@ def process_partition(
 
             accepted_count += 1
 
-        # Mark partition COMPLETED.
         cursor.execute(
             """
             UPDATE backfill_partitions
@@ -236,7 +214,6 @@ def process_partition(
             ),
         )
 
-        # Commit records and partition status together.
         connection.commit()
 
         print(
@@ -253,10 +230,8 @@ def process_partition(
         }
 
     except Exception as error:
-
         connection.rollback()
 
-        # Record failure using a fresh transaction.
         try:
             cursor.execute(
                 """
@@ -307,7 +282,10 @@ def execute_backfill(
 
     events = read_events(input_file)
 
-    # Create the run and load customers before workers start.
+    # FIX: Load customers before validating event records.
+    load_customers()
+
+    # Create the run and load customer IDs.
     connection = get_connection(DATABASE_PATH)
     cursor = connection.cursor()
 
@@ -352,7 +330,6 @@ def execute_backfill(
     invalid_date_events = []
 
     for event in events:
-
         event_date = event.get("event_date", "")
 
         try:
@@ -367,7 +344,6 @@ def execute_backfill(
         partition_date = parsed_date.isoformat()
 
         if start_date <= partition_date <= end_date:
-
             partitions.setdefault(
                 partition_date,
                 [],
@@ -379,7 +355,6 @@ def execute_backfill(
 
     try:
         for event in invalid_date_events:
-
             reason = (
                 "Invalid event_date; "
                 "cannot assign daily partition"
@@ -424,9 +399,8 @@ def execute_backfill(
                 ),
             )
 
-        # Create partition tracking rows before workers start.
+        # Create partition tracking rows.
         for partition_date, partition_events in partitions.items():
-
             cursor.execute(
                 """
                 INSERT OR IGNORE INTO backfill_partitions (
@@ -464,7 +438,6 @@ def execute_backfill(
     with ThreadPoolExecutor(
         max_workers=MAX_WORKERS
     ) as executor:
-
         futures = {
             executor.submit(
                 process_partition,
@@ -473,17 +446,15 @@ def execute_backfill(
                 run_id,
                 customer_ids,
             ): partition_date
-
             for partition_date, partition_events
             in sorted(partitions.items())
         }
 
         for future in as_completed(futures):
-
             result = future.result()
             results.append(result)
 
-    # Get final partition counts from the database.
+    # Get final partition counts.
     connection = get_connection(DATABASE_PATH)
     cursor = connection.cursor()
 
@@ -574,7 +545,6 @@ def execute_backfill(
 
 
 def main():
-
     parser = argparse.ArgumentParser(
         description="Execute historical backfill."
     )
