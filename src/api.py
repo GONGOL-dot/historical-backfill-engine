@@ -4,6 +4,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from fastapi import FastAPI, HTTPException
+from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
 from src.executor import execute_backfill
@@ -23,22 +24,24 @@ class BackfillRequest(BaseModel):
     run_id: str | None = None
 
 
-@app.get("/")
+# Redirect public homepage to Swagger API documentation
+@app.get("/", include_in_schema=False)
 def home():
-    return {
-        "message": "Historical Backfill Engine API is running",
-        "docs": "/docs",
-    }
+    return RedirectResponse(url="/docs")
 
 
+# Execute historical backfill
 @app.post("/backfill")
 def start_backfill(request: BackfillRequest):
+
+    # Validate date range
     if request.start_date > request.end_date:
         raise HTTPException(
             status_code=400,
             detail="Start date cannot be after end date.",
         )
 
+    # Validate input file
     input_path = Path(request.input_file)
 
     if not input_path.exists():
@@ -47,6 +50,7 @@ def start_backfill(request: BackfillRequest):
             detail=f"Input file not found: {request.input_file}",
         )
 
+    # Generate run ID if not provided
     run_id = request.run_id or str(uuid4())
 
     try:
