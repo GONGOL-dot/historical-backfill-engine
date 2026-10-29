@@ -7,7 +7,12 @@ from fastapi import FastAPI, HTTPException
 from fastapi.responses import RedirectResponse
 from pydantic import BaseModel
 
-from src.executor import execute_backfill
+from src.executor import execute_backfill, DATABASE_PATH
+from src.storage import initialize_database
+
+
+# Initialize database tables when the API starts
+initialize_database(DATABASE_PATH)
 
 
 app = FastAPI(
@@ -24,7 +29,7 @@ class BackfillRequest(BaseModel):
     run_id: str | None = None
 
 
-# Redirect public homepage to Swagger API documentation
+# Redirect homepage to Swagger documentation
 @app.get("/", include_in_schema=False)
 def home():
     return RedirectResponse(url="/docs")
